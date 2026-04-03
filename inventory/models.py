@@ -64,6 +64,7 @@ class User(AbstractUser):
         'sales.create',
         'sales.history.view',
         'stock.view',
+        'forecast.view',
         'products.create',
         'products.read',
         'products.update',

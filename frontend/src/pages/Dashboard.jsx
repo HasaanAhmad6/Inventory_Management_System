@@ -22,12 +22,16 @@ export default function Dashboard() {
     const [data, setData]       = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError]     = useState('');
+    const [forecastLoading, setForecastLoading] = useState(true);
+    const [forecastError, setForecastError] = useState('');
+    const [atRiskProducts, setAtRiskProducts] = useState([]);
     const [monthsWindow, setMonthsWindow] = useState(6);
     const [chartLoading, setChartLoading] = useState(false);
     const [chartError, setChartError] = useState('');
     const isInitialLoadRef = useRef(true);
-    const { user, isSuperUser } = useAuth();
+    const { user, isSuperUser, can } = useAuth();
     const { isMobile, isTablet } = useBreakpoint();
+    const canViewForecast = can('forecast.view');
 
     const handleMonthsWindowChange = (value) => {
         setChartLoading(true);
@@ -57,6 +61,29 @@ export default function Dashboard() {
                 }
             });
     }, [monthsWindow]);
+
+    useEffect(() => {
+        if (!canViewForecast) {
+            setForecastLoading(false);
+            return;
+        }
+        API.get('demand-forecast/?days=7')
+            .then((res) => {
+                const rows = Array.isArray(res.data?.forecast) ? res.data.forecast : [];
+                const top5 = rows
+                    .filter((item) => item.will_run_low_within_horizon)
+                    .slice(0, 5);
+                setAtRiskProducts(top5);
+            })
+            .catch((err) => {
+                if (err?.response?.status === 403) {
+                    setForecastError('You do not have permission to view demand forecast.');
+                } else {
+                    setForecastError('Demand forecast is temporarily unavailable.');
+                }
+            })
+            .finally(() => setForecastLoading(false));
+            }, [canViewForecast]);
 
     if (loading) return (
         <Layout>
@@ -168,6 +195,111 @@ export default function Dashboard() {
                         </div>
                     ))}
                 </div>
+
+                {/* Demand Forecast Widget */}
+                {canViewForecast && (
+                <div style={{
+                    backgroundColor: '#1a1a2e',
+                    borderRadius: 14,
+                    padding: 22,
+                    border: '1px solid #2a2a4a',
+                    marginBottom: 28,
+                }}>
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        marginBottom: 14,
+                        flexWrap: 'wrap',
+                    }}>
+                        <div>
+                            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#fff' }}>
+                                Top 5 At-Risk Products (Next 7 Days)
+                            </h3>
+                            <p style={{ margin: '4px 0 0', color: '#94A3B8', fontSize: 12 }}>
+                                Items most likely to hit low stock soon based on sales velocity.
+                            </p>
+                        </div>
+                        <Link
+                            to="/demand-forecast"
+                            style={{
+                                textDecoration: 'none',
+                                color: '#a5b4fc',
+                                border: '1px solid #4f46e544',
+                                background: '#4f46e522',
+                                borderRadius: 8,
+                                padding: '7px 10px',
+                                fontSize: 12,
+                                fontWeight: 700,
+                            }}
+                        >
+                            View Full Forecast
+                        </Link>
+                    </div>
+
+                    {forecastLoading ? (
+                        <div style={{ color: '#94A3B8', fontSize: 13 }}>Loading forecast widget...</div>
+                    ) : forecastError ? (
+                        <div style={{ color: '#fca5a5', fontSize: 13 }}>{forecastError}</div>
+                    ) : atRiskProducts.length === 0 ? (
+                        <div style={{
+                            color: '#4ade80',
+                            fontSize: 13,
+                            background: '#4ade8018',
+                            border: '1px solid #4ade8040',
+                            borderRadius: 10,
+                            padding: '10px 12px',
+                        }}>
+                            No products are projected to run low in the next 7 days.
+                        </div>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                            {atRiskProducts.map((item) => (
+                                <Link
+                                    key={item.product_id}
+                                    to={`/products?focusProductId=${item.product_id}`}
+                                    style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        gap: 10,
+                                        background: '#0f0f23',
+                                        border: '1px solid #2a2a4a',
+                                        borderRadius: 10,
+                                        padding: '10px 12px',
+                                        flexWrap: 'wrap',
+                                        textDecoration: 'none',
+                                    }}
+                                >
+                                    <div>
+                                        <div style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>{item.name}</div>
+                                        <div style={{ color: '#64748B', fontSize: 12 }}>
+                                            {item.sku} • Stock {item.current_stock} • Threshold {item.low_stock_threshold}
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                        <span style={{ color: '#93c5fd', fontSize: 12, fontWeight: 600 }}>
+                                            Low in {item.days_until_low_stock ?? 'N/A'} days
+                                        </span>
+                                        <span style={{
+                                            padding: '4px 9px',
+                                            borderRadius: 999,
+                                            fontSize: 11,
+                                            fontWeight: 700,
+                                            color: '#fb7185',
+                                            background: '#fb718522',
+                                            border: '1px solid #fb718544',
+                                        }}>
+                                            AT RISK
+                                        </span>
+                                    </div>
+                                </Link>
+                            ))}
+                        </div>
+                    )}
+                </div>
+                )}
 
                 {/* Low Stock Alert — visible to everyone */}
                 {data.low_stock_items > 0 && data.low_stock_list?.length > 0 && (

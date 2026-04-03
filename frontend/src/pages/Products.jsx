@@ -149,7 +149,7 @@ export default function Products() {
                     {showActionButtons && (
                         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                             {canManagePurchases && (
-                                <button onClick={() => navigate('/purchases')} style={styles.secondaryBtn}>
+                                <button onClick={() => navigate('/purchases?openModal=purchase')} style={styles.secondaryBtn}>
                                     🛒 Record Purchase
                                 </button>
                             )}

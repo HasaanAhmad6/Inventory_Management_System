@@ -25,6 +25,10 @@ INSTALLED_APPS = [
     'inventory',
 ]
 
+USE_MINIO = os.getenv('USE_MINIO', 'False').lower() == 'true'
+if USE_MINIO:
+    INSTALLED_APPS.append('storages')
+
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -143,9 +147,33 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# ← NEW: Media files for product images
+# Media storage: local filesystem (default) or MinIO (when USE_MINIO=True).
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+if USE_MINIO:
+    MINIO_INTERNAL_ENDPOINT = os.getenv('MINIO_INTERNAL_ENDPOINT', 'http://minio:9000').rstrip('/')
+    MINIO_PUBLIC_ENDPOINT = os.getenv('MINIO_PUBLIC_ENDPOINT', 'http://127.0.0.1:9000').rstrip('/')
+    AWS_ACCESS_KEY_ID = os.getenv('MINIO_ROOT_USER', 'minioadmin')
+    AWS_SECRET_ACCESS_KEY = os.getenv('MINIO_ROOT_PASSWORD', 'minioadmin')
+    AWS_STORAGE_BUCKET_NAME = os.getenv('MINIO_BUCKET_MEDIA', 'invms-media')
+    AWS_S3_REGION_NAME = os.getenv('MINIO_REGION', 'us-east-1')
+    AWS_S3_ENDPOINT_URL = MINIO_INTERNAL_ENDPOINT
+    AWS_S3_ADDRESSING_STYLE = 'path'
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = False
+    AWS_S3_FILE_OVERWRITE = False
+
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+    MEDIA_URL = f'{MINIO_PUBLIC_ENDPOINT}/{AWS_STORAGE_BUCKET_NAME}/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

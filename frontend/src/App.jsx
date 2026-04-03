@@ -16,6 +16,7 @@ import Suppliers   from './pages/Suppliers';
 import UserManagement from './pages/UserManagement';
 import AuditLog    from './pages/AuditLog';
 import LowStock    from './pages/LowStock';
+import DemandForecast from './pages/DemandForecast';
 import Trash       from './pages/Trash';
 import Vouchers    from './pages/Vouchers';
 import Settings    from './pages/Settings';
@@ -34,6 +35,7 @@ export default function App() {
                     <Route path="/products"  element={<PrivateRoute><Products  /></PrivateRoute>} />
                     <Route path="/sales"     element={<PrivateRoute><Sales     /></PrivateRoute>} />
                     <Route path="/low-stock" element={<PrivateRoute><LowStock  /></PrivateRoute>} />
+                    <Route path="/demand-forecast" element={<PermissionRoute permission="forecast.view"><DemandForecast /></PermissionRoute>} />
                     <Route path="/settings"  element={<PrivateRoute><Settings  /></PrivateRoute>} />
 
                     {/* Admin only */}

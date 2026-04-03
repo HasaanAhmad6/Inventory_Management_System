@@ -112,12 +112,10 @@ export default function AddProduct() {
         setLoading(true);
         try {
             const data = new FormData();
-            const discountedPrice = Math.max(0, fullPrice * (1 - discountPercent / 100));
             const payload = {
                 ...form,
                 full_price: String(fullPrice),
                 discount_percent: String(discountPercent),
-                sale_price: discountedPrice.toFixed(2),
             };
             Object.entries(payload).forEach(([k, v]) => { if (v !== '' && v !== null && v !== undefined) data.append(k, v); });
             if (imageFile) data.append('image', imageFile);
@@ -412,17 +410,16 @@ export default function AddProduct() {
                                 />
                                 <span style={styles.hint}>Alert will trigger when stock is equal to or below this value.</span>
                             </div>
-                        </div>
-                    </div>
 
-                    {/* Buttons */}
-                    <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
-                        <button type="submit" style={loading ? styles.btnDisabled : styles.submitBtn} disabled={loading}>
-                            {loading ? '⏳ Saving...' : '✅ Add Product'}
-                        </button>
-                        <button type="button" onClick={() => navigate('/products')} style={styles.cancelBtn}>
-                            Cancel
-                        </button>
+                            <div style={styles.formActions}>
+                                <button type="submit" style={loading ? styles.btnDisabled : styles.submitBtn} disabled={loading}>
+                                    {loading ? '⏳ Saving...' : '✅ Add Product'}
+                                </button>
+                                <button type="button" onClick={() => navigate('/products')} style={styles.cancelBtn}>
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -537,6 +534,12 @@ const styles = {
     codeBox: { marginBottom: 10, display: 'flex', justifyContent: 'center' },
     input: { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #2a2a4a', fontSize: 14, boxSizing: 'border-box', outline: 'none', backgroundColor: '#0f0f23', color: '#fff' },
     previewBox: { backgroundColor: '#0f0f23', border: '1px solid #2a2a4a', borderRadius: 8, padding: '10px 12px', color: '#cbd5e1', fontSize: 14, marginBottom: 14 },
+    formActions: {
+        display: 'flex',
+        gap: 12,
+        marginTop: 16,
+        flexWrap: 'wrap',
+    },
     submitBtn: { backgroundColor: '#6c63ff', color: 'white', border: 'none', padding: '11px 28px', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: 15, boxShadow: '0 4px 12px rgba(108,99,255,0.3)' },
     btnDisabled: { backgroundColor: '#94A3B8', color: 'white', border: 'none', padding: '11px 28px', borderRadius: 8, cursor: 'not-allowed', fontWeight: 600, fontSize: 15 },
     cancelBtn: { background: '#ffffff10', border: '1px solid #2a2a4a', color: '#cbd5e1', padding: '11px 28px', borderRadius: 8, cursor: 'pointer', fontSize: 15 },

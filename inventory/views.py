@@ -1,4 +1,6 @@
 import base64
+import json
+import os
 from rest_framework import generics, viewsets, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -15,6 +17,8 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 import datetime
 import uuid
 from xml.sax.saxutils import escape
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -182,6 +186,245 @@ def _realized_cost_expression():
         F('quantity') * F('unit_cost'),
         output_field=MONEY_OUTPUT_FIELD,
     )
+
+
+def _money_text(value):
+    try:
+        return f'Rs. {Decimal(str(value or 0)).quantize(Decimal("0.01"))}'
+    except Exception:
+        return f'Rs. {value or 0}'
+
+
+def _build_purchase_audit_note(before, after):
+    changes = []
+
+    before_product = getattr(before.product, 'name', None)
+    after_product = getattr(after.product, 'name', None)
+    if before_product != after_product:
+        changes.append(f'Product: {before_product} -> {after_product}')
+
+    if before.quantity != after.quantity:
+        changes.append(f'Qty: {before.quantity} -> {after.quantity}')
+
+    if Decimal(str(before.unit_cost)) != Decimal(str(after.unit_cost)):
+        changes.append(f'Unit cost: {_money_text(before.unit_cost)} -> {_money_text(after.unit_cost)}')
+
+    if Decimal(str(before.selling_price)) != Decimal(str(after.selling_price)):
+        changes.append(f'Selling price: {_money_text(before.selling_price)} -> {_money_text(after.selling_price)}')
+
+    if Decimal(str(before.full_selling_price or 0)) != Decimal(str(after.full_selling_price or 0)):
+        changes.append(f'Full price: {_money_text(before.full_selling_price)} -> {_money_text(after.full_selling_price)}')
+
+    before_discount = Decimal(str(before.discount_percent or 0))
+    after_discount = Decimal(str(after.discount_percent or 0))
+    if before_discount != after_discount:
+        changes.append(f'Discount: {before_discount}% -> {after_discount}%')
+
+    before_notes = (before.notes or '').strip()
+    after_notes = (after.notes or '').strip()
+    if before_notes != after_notes:
+        before_short = before_notes[:35] + ('…' if len(before_notes) > 35 else '') if before_notes else '—'
+        after_short = after_notes[:35] + ('…' if len(after_notes) > 35 else '') if after_notes else '—'
+        changes.append(f'Notes: {before_short} -> {after_short}')
+
+    if not changes:
+        return f'Purchase #{after.pk} updated without field changes.'
+
+    note = f'Purchase #{after.pk} updated | ' + ' | '.join(changes)
+    return note[:255]
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _compute_demand_forecast(days=7):
+    horizon_days = max(1, min(30, _safe_int(days, 7)))
+    now = timezone.now()
+    lookback_days = max(28, horizon_days * 4)
+    since = now - datetime.timedelta(days=lookback_days)
+
+    daily_sales = (
+        Sale.objects.filter(date__gte=since)
+        .values('product_id', 'date__date')
+        .annotate(total_qty=Coalesce(Sum('quantity'), 0))
+    )
+
+    sales_map = {}
+    for row in daily_sales:
+        product_id = row['product_id']
+        date_key = row['date__date'].isoformat()
+        sales_map.setdefault(product_id, {})[date_key] = int(row['total_qty'] or 0)
+
+    today = now.date()
+    last_7_dates = [(today - datetime.timedelta(days=i)).isoformat() for i in range(7)]
+    last_28_dates = [(today - datetime.timedelta(days=i)).isoformat() for i in range(28)]
+
+    products = Product.objects.select_related('category', 'supplier').all().order_by('name')
+    results = []
+
+    for product in products:
+        try:
+            stock_obj = product.stock
+        except Stock.DoesNotExist:
+            stock_obj = None
+
+        stock_qty = int(getattr(stock_obj, 'quantity', 0) or 0)
+        threshold = int(getattr(stock_obj, 'low_stock_threshold', 0) or 0)
+        series = sales_map.get(product.id, {})
+
+        sum_last_7 = sum(int(series.get(d, 0) or 0) for d in last_7_dates)
+        sum_last_28 = sum(int(series.get(d, 0) or 0) for d in last_28_dates)
+        avg_daily_7 = sum_last_7 / 7.0
+        avg_daily_28 = sum_last_28 / 28.0
+        weighted_daily = round((avg_daily_7 * 0.7) + (avg_daily_28 * 0.3), 4)
+
+        forecast_units = int(round(weighted_daily * horizon_days))
+        remaining_after_horizon = stock_qty - forecast_units
+
+        days_until_threshold = None
+        if weighted_daily > 0:
+            days_until_threshold = round((stock_qty - threshold) / weighted_daily, 2)
+
+        will_run_low = bool(days_until_threshold is not None and days_until_threshold <= horizon_days)
+
+        results.append({
+            'product_id': product.id,
+            'name': product.name,
+            'sku': product.sku,
+            'category': product.category.name if product.category else None,
+            'supplier': product.supplier.name if product.supplier else None,
+            'current_stock': stock_qty,
+            'low_stock_threshold': threshold,
+            'avg_daily_sales_7d': round(avg_daily_7, 2),
+            'avg_daily_sales_28d': round(avg_daily_28, 2),
+            'weighted_daily_sales': weighted_daily,
+            'forecast_units_next_days': max(0, forecast_units),
+            'expected_stock_after_horizon': remaining_after_horizon,
+            'days_until_low_stock': days_until_threshold,
+            'will_run_low_within_horizon': will_run_low,
+        })
+
+    results.sort(
+        key=lambda item: (
+            0 if item['will_run_low_within_horizon'] else 1,
+            item['days_until_low_stock'] if item['days_until_low_stock'] is not None else 10**9,
+            item['expected_stock_after_horizon'],
+        )
+    )
+
+    summary = {
+        'horizon_days': horizon_days,
+        'total_products': len(results),
+        'at_risk_count': sum(1 for item in results if item['will_run_low_within_horizon']),
+        'already_low_count': sum(1 for item in results if item['current_stock'] <= item['low_stock_threshold']),
+        'no_sales_signal_count': sum(1 for item in results if item['weighted_daily_sales'] <= 0),
+    }
+    return results, summary
+
+
+def _generate_gemini_demand_insights(forecast_rows, summary, horizon_days):
+    api_key = (os.getenv('GEMINI_API_KEY') or '').strip()
+    if not api_key:
+        return {
+            'enabled': False,
+            'model': 'gemini-2.5-flash',
+            'insights': None,
+            'error': 'GEMINI_API_KEY is not configured. Returning stats-only forecast.',
+        }
+
+    at_risk = [row for row in forecast_rows if row['will_run_low_within_horizon']][:12]
+    top_demand = sorted(
+        [row for row in forecast_rows if row['weighted_daily_sales'] > 0],
+        key=lambda x: x['weighted_daily_sales'],
+        reverse=True,
+    )[:12]
+
+    payload_input = {
+        'summary': summary,
+        'at_risk_products': at_risk,
+        'top_demand_products': top_demand,
+    }
+
+    prompt = (
+        'You are an inventory planning assistant. '
+        f'Analyze this {horizon_days}-day demand forecast and return concise operational advice.\n\n'
+        'Respond in plain text with these exact headings:\n'
+        '1) Executive Summary\n'
+        '2) Reorder Priorities\n'
+        '3) Products To Monitor\n'
+        '4) Suggested Actions For Next 7 Days\n\n'
+        'Keep it actionable and short. Ensure each sentence is complete and do not end with unfinished lines. '
+        'Finish all four sections fully before ending the response.\n\n'
+        f'Data:\n{json.dumps(payload_input, ensure_ascii=True)}'
+    )
+
+    request_body = {
+        'contents': [
+            {
+                'parts': [
+                    {'text': prompt}
+                ]
+            }
+        ],
+        'generationConfig': {
+            'temperature': 0.2,
+            'maxOutputTokens': 2400,
+        },
+    }
+
+    endpoint = (
+        'https://generativelanguage.googleapis.com/v1beta/models/'
+        'gemini-2.5-flash:generateContent'
+        f'?key={api_key}'
+    )
+
+    try:
+        req = urllib_request.Request(
+            endpoint,
+            data=json.dumps(request_body).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with urllib_request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+
+        candidates = data.get('candidates') or []
+        parts = (((candidates[0] if candidates else {}).get('content') or {}).get('parts') or [])
+        text = '\n'.join(part.get('text', '') for part in parts if part.get('text')).strip()
+
+        if not text:
+            return {
+                'enabled': True,
+                'model': 'gemini-2.5-flash',
+                'insights': None,
+                'error': 'Gemini returned no text insights.',
+            }
+
+        return {
+            'enabled': True,
+            'model': 'gemini-2.5-flash',
+            'insights': text,
+            'error': None,
+        }
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='ignore') if hasattr(exc, 'read') else str(exc)
+        return {
+            'enabled': True,
+            'model': 'gemini-2.5-flash',
+            'insights': None,
+            'error': f'Gemini HTTP error: {exc.code}. {detail[:300]}',
+        }
+    except Exception as exc:
+        return {
+            'enabled': True,
+            'model': 'gemini-2.5-flash',
+            'insights': None,
+            'error': f'Gemini request failed: {str(exc)}',
+        }
 
 
 # â”€â”€ AUTH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -470,6 +713,14 @@ class PurchaseViewSet(viewsets.ModelViewSet):
             product.full_price = purchase.full_selling_price
             product.discount_percent = purchase.discount_percent
             product.save(update_fields=['price', 'sale_price', 'full_price', 'discount_percent'])
+
+            AuditLog.objects.create(
+                user=self.request.user,
+                action='UPDATE',
+                model_name='Purchase',
+                object_id=str(purchase.pk),
+                object_repr=_build_purchase_audit_note(previous, purchase),
+            )
 
 
 # â”€â”€ SALE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -884,10 +1135,11 @@ def me(request):
     """Returns the logged-in user's id, username, and role."""
     can_manage_users = request.user.is_superuser
     effective_permissions = request.user.get_effective_permissions()
+    display_role = 'superuser' if request.user.is_superuser else request.user.role
     return Response({
         'id':       request.user.id,
         'username': request.user.username,
-        'role':     request.user.role,
+        'role':     display_role,
         'is_superuser': request.user.is_superuser,
         'can_manage_users': can_manage_users,
         'permissions': effective_permissions,
@@ -941,7 +1193,7 @@ def users_list(request):
             'id':          u.id,
             'username':    u.username,
             'email':       u.email,
-            'role':        u.role,
+            'role':        'superuser' if u.is_superuser else u.role,
             'is_active':   u.is_active,
             'is_superuser': u.is_superuser,
             'permissions': u.get_effective_permissions(),
@@ -989,7 +1241,7 @@ def update_user(request, user_id):
         'id':        target.id,
         'username':  target.username,
         'email':     target.email,
-        'role':      target.role,
+        'role':      'superuser' if target.is_superuser else target.role,
         'is_active': target.is_active,
         'permissions': target.get_effective_permissions(),
     })
@@ -1346,6 +1598,32 @@ def low_stock_list(request):
             'supplier_email': s.product.supplier.email if s.product.supplier else None,
         })
     return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def demand_forecast(request):
+    """Forecast next N days of demand for all products and return optional Gemini insights."""
+    if not (
+        is_operational_admin(request.user)
+        or has_capability(request.user, 'forecast.view')
+    ):
+        return Response({'detail': 'You do not have permission to view demand forecast.'}, status=403)
+
+    requested_days = _safe_int(request.query_params.get('days', 7), 7)
+    forecast_rows, summary = _compute_demand_forecast(requested_days)
+    gemini = _generate_gemini_demand_insights(
+        forecast_rows=forecast_rows,
+        summary=summary,
+        horizon_days=summary['horizon_days'],
+    )
+
+    return Response({
+        'generated_at': timezone.now().isoformat(),
+        'summary': summary,
+        'forecast': forecast_rows,
+        'gemini': gemini,
+    })
 
 
 # â”€â”€ PRODUCT SCAN (barcode / QR lookup) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

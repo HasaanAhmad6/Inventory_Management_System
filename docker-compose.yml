@@ -9,6 +9,32 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin}; do sleep 1; done;
+      mc mb -p local/${MINIO_BUCKET_MEDIA:-invms-media} || true;
+      mc anonymous set download local/${MINIO_BUCKET_MEDIA:-invms-media};
+      exit 0;
+      "
+
   backend:
     build:
       context: .
@@ -16,6 +42,8 @@ services:
     restart: unless-stopped
     depends_on:
       - db
+      - minio
+      - minio-init
     environment:
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: ${DEBUG}
@@ -27,6 +55,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_HOST: ${POSTGRES_HOST}
       POSTGRES_PORT: ${POSTGRES_PORT}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      USE_MINIO: ${USE_MINIO:-False}
+      MINIO_INTERNAL_ENDPOINT: ${MINIO_INTERNAL_ENDPOINT:-http://minio:9000}
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://127.0.0.1:9000}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET_MEDIA: ${MINIO_BUCKET_MEDIA:-invms-media}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
     ports:
       - "8000:8000"
     volumes:
@@ -53,3 +89,4 @@ volumes:
   pg_data:
   media_data:
   static_data:
+  minio_data:

@@ -27,6 +27,7 @@ from .views import (
     sales_selected_invoice,
     set_all_product_thresholds,
     low_stock_list,
+    demand_forecast,
     product_scan,
     trash_list,
     restore_item,
@@ -65,6 +66,7 @@ urlpatterns = [
     # Low stock + notifications
     path('low-stock/', low_stock_list, name='low_stock_list'),
     path('low-stock/set-threshold-all/', set_all_product_thresholds, name='set_all_product_thresholds'),
+    path('demand-forecast/', demand_forecast, name='demand_forecast'),
     path('products/scan/', product_scan, name='product_scan'),
     path('notifications/',             NotificationViewSet.as_view({'get': 'list'}),             name='notifications'),
     path('notifications/unread-count/', NotificationViewSet.as_view({'get': 'unread_count'}),    name='notifications_unread'),

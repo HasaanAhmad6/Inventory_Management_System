@@ -58,12 +58,10 @@ export default function EditProduct() {
         }
         setLoading(true);
         try {
-            const discountedPrice = Math.max(0, fullPrice * (1 - discountPercent / 100));
             await API.put(`products/${id}/`, {
                 ...form,
                 full_price: String(fullPrice),
                 discount_percent: String(discountPercent),
-                sale_price: discountedPrice.toFixed(2),
             });
             navigate('/products');
         } catch (err) {

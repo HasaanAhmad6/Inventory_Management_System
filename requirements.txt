@@ -2,6 +2,8 @@ Django==5.2.12
 django-cors-headers==4.9.0
 djangorestframework==3.17.1
 djangorestframework-simplejwt==5.5.1
+django-storages==1.14.6
+boto3==1.37.38
 Pillow==12.1.1
 psycopg2-binary==2.9.11
 python-decouple==3.8

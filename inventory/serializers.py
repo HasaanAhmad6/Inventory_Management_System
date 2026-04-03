@@ -95,6 +95,48 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_has_cost_variation(self, obj):
         return obj.purchases.values_list('unit_cost', flat=True).distinct().count() > 1
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = getattr(self, 'instance', None)
+
+        discount_percent = attrs.get('discount_percent', instance.discount_percent if instance else Decimal('0'))
+        if discount_percent is None:
+            discount_percent = Decimal('0')
+        discount_percent = Decimal(str(discount_percent))
+
+        if discount_percent < 0 or discount_percent > 100:
+            raise serializers.ValidationError({'discount_percent': 'Discount percent must be between 0 and 100.'})
+
+        full_price = attrs.get('full_price')
+        sale_price = attrs.get('sale_price')
+
+        if full_price is None:
+            if sale_price is not None and discount_percent == 0:
+                full_price = sale_price
+            elif sale_price is not None and discount_percent > 0:
+                discounted_multiplier = (Decimal('100') - discount_percent) / Decimal('100')
+                if discounted_multiplier > 0:
+                    full_price = (Decimal(str(sale_price)) / discounted_multiplier).quantize(
+                        Decimal('0.01'),
+                        rounding=ROUND_HALF_UP,
+                    )
+                else:
+                    full_price = sale_price
+            elif instance:
+                full_price = instance.full_price or instance.sale_price
+
+        if full_price is not None:
+            full_price = Decimal(str(full_price))
+            discounted_multiplier = (Decimal('100') - discount_percent) / Decimal('100')
+            attrs['full_price'] = full_price
+            attrs['discount_percent'] = discount_percent
+            attrs['sale_price'] = (full_price * discounted_multiplier).quantize(
+                Decimal('0.01'),
+                rounding=ROUND_HALF_UP,
+            )
+
+        return attrs
+
     def create(self, validated_data):
         low_stock_threshold = validated_data.pop('low_stock_threshold', 10)
         product = super().create(validated_data)
@@ -132,6 +174,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
         )
         if discount_percent is None:
             discount_percent = Decimal('0')
+        discount_percent = Decimal(str(discount_percent))
 
         if discount_percent < 0 or discount_percent > 100:
             raise serializers.ValidationError({'discount_percent': 'Discount percent must be between 0 and 100.'})
@@ -145,7 +188,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
             elif incoming_selling_price is not None and discount_percent > 0:
                 discounted_multiplier = (Decimal('100') - discount_percent) / Decimal('100')
                 if discounted_multiplier > 0:
-                    full_selling_price = (incoming_selling_price / discounted_multiplier).quantize(
+                    full_selling_price = (Decimal(str(incoming_selling_price)) / discounted_multiplier).quantize(
                         Decimal('0.01'),
                         rounding=ROUND_HALF_UP,
                     )
@@ -155,6 +198,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 full_selling_price = instance.full_selling_price or instance.selling_price
 
         if full_selling_price is not None:
+            full_selling_price = Decimal(str(full_selling_price))
             discounted_multiplier = (Decimal('100') - discount_percent) / Decimal('100')
             effective_selling_price = (full_selling_price * discounted_multiplier).quantize(
                 Decimal('0.01'),

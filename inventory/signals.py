@@ -36,6 +36,8 @@ def _log(action, instance):
 def on_save(sender, instance, created, **kwargs):
     if sender not in TRACKED_MODELS:
         return
+    if sender is Purchase and not created:
+        return
     _log('CREATE' if created else 'UPDATE', instance)
 
 

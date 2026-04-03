@@ -18,6 +18,7 @@ export default function Sidebar() {
         ...(can('products.read') || can('products.create') || can('products.update') || can('products.delete') || can('stock.view') || can('sales.create') || can('purchases.manage') ? [{ path: "/products", icon: "📦", label: "Products" }] : []),
         ...(can('sales.create') ? [{ path: "/sales", icon: "💰", label: "Sales" }] : []),
         ...(can('stock.view') ? [{ path: "/low-stock", icon: "⚠️", label: "Low Stock" }] : []),
+        ...(can('forecast.view') ? [{ path: "/demand-forecast", icon: "🔮", label: "Forecast" }] : []),
         ...(can('purchases.manage') ? [
             { path: "/purchases", icon: "🛒", label: "Purchases" },
         ] : []),

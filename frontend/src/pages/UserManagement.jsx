@@ -165,6 +165,7 @@ export default function UserManagement() {
             'sales.create': 'Sales - Create',
             'sales.history.view': 'Sales - History View',
             'stock.view': 'Stock - View',
+            'forecast.view': 'Forecast - View',
             'purchases.view': 'Purchases - View',
             'purchases.manage': 'Purchases - Manage',
             'categories.manage': 'Categories - Manage',
